@@ -1,0 +1,190 @@
+--!native
+local Top = {}
+
+local DataStoreService = game:GetService("DataStoreService")
+local ServerScriptService = game:GetService("ServerScriptService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local LocalizationService = game:GetService("LocalizationService")
+local RunService = game:GetService("RunService")
+local HttpService = game:GetService("HttpService")
+
+local Configuracoes = require(ReplicatedStorage:WaitForChild("Configuração"):WaitForChild("Configurações"))
+local PlayerInfo = require(ServerScriptService:WaitForChild("_G.Players"))
+local PaternDeEquipamento = require(ServerScriptService:WaitForChild("Patern"):WaitForChild("PaternDeEstatisticaDeEquipamento")).Clone()
+
+local TopDataStore = DataStoreService:GetDataStore("Top")
+
+local LimiteClassXP = 100
+local LimiteClassStatistic = 100
+local LimiteItens = 10
+
+local function WaitForRequestBudget(requestedType:Enum.DataStoreRequestType)
+	local currentBudget = DataStoreService:GetRequestBudgetForRequestType(requestedType)
+	while currentBudget < 1 do
+		currentBudget = DataStoreService:GetRequestBudgetForRequestType(requestedType)
+		task.wait(5)
+	end
+end
+
+local function Comparar(TopAtual,ValorDoPlayer:number,Nome:string,Player:Player,Limite:number)
+	local Mudanca = false
+	if not TopAtual[Nome] then
+		Mudanca = true
+		TopAtual[Nome] = {}
+	end
+	if #TopAtual[Nome] < Limite then
+		local Encontrado = false
+		for i,k in ipairs(TopAtual[Nome]) do
+			if k[4] == Player.UserId then
+				Encontrado = i
+				break
+			end
+		end
+		if not Encontrado then
+			Mudanca = true
+			local Localizacao = LocalizationService:GetCountryRegionForPlayerAsync(Player)
+			table.insert(TopAtual[Nome],{Player.Name,math.floor(ValorDoPlayer),Localizacao,Player.UserId})
+			table.sort(TopAtual[Nome],function(A,B)
+				return A[2] > B[2]
+			end)
+		elseif TopAtual[Nome][Encontrado][2] ~= ValorDoPlayer then
+			Mudanca = true
+			local Localizacao = LocalizationService:GetCountryRegionForPlayerAsync(Player)
+			table.remove(TopAtual[Nome],Encontrado)
+			table.insert(TopAtual[Nome],{Player.Name,math.floor(ValorDoPlayer),Localizacao,Player.UserId})
+			table.sort(TopAtual[Nome],function(A,B)
+				return A[2] > B[2]
+			end)
+		end
+	elseif ValorDoPlayer > TopAtual[Nome][Limite][2] then
+		Mudanca = true
+		local PlayerJaEstaNaLista = false
+		for i=1,#TopAtual[Nome] do
+			if TopAtual[Nome][i][1] == Player.Name then
+				PlayerJaEstaNaLista = i
+				break
+			end
+		end
+		if PlayerJaEstaNaLista then
+			table.remove(TopAtual[Nome],PlayerJaEstaNaLista)
+		end
+		local Localizacao = LocalizationService:GetCountryRegionForPlayerAsync(Player)
+		table.insert(TopAtual[Nome],{Player.Name,math.floor(ValorDoPlayer),Localizacao,Player.UserId})
+		table.sort(TopAtual[Nome],function(A,B)
+			return A[2] > B[2]
+		end)
+		if #TopAtual[Nome] > Limite then
+			TopAtual[Nome][#TopAtual[Nome]] = nil
+		end
+	end
+	return Mudanca
+end
+
+task.spawn(function()
+	pcall(function()
+		Top.AtualTop = TopDataStore:GetAsync("Top")
+	end)
+	while task.wait(60) do
+		if RunService:IsStudio() then continue end
+		local Informacoes = PlayerInfo.GetAllPlayers()
+		local Sucesso, Mensagem
+		local T1,T2
+		repeat
+			WaitForRequestBudget(Enum.DataStoreRequestType.UpdateAsync)
+			Sucesso, Mensagem = pcall(function()
+				return TopDataStore:UpdateAsync("Top",function(TopAtual)
+					local Mudanca = false
+					if not TopAtual then
+						Mudanca = true
+						TopAtual = {}
+					end
+					if not TopAtual.ClassXP then
+						Mudanca = true
+						TopAtual.ClassXP = {}
+					end
+					if not TopAtual.ClassTime then
+						Mudanca = true
+						TopAtual.ClassTime = {}
+					end
+					if not TopAtual.ClassStatistic then
+						Mudanca = true
+						TopAtual.ClassStatistic = {}
+					end
+					if not TopAtual.ItemStatistic then
+						Mudanca = true
+						TopAtual.ItemStatistic = {}
+					end
+					if not TopAtual.Geral then
+						Mudanca = true
+						TopAtual.Geral = {}
+					end
+					for Player:Player,Info in pairs(Informacoes) do
+						local ClassXP = Info.ClassXP
+						local ClassStatistic = Info.ClassStatistic
+						local ItemStatistic = Info.ItemStatistic
+						local ClassTime = Info.ClassTime
+						local Geral = {}
+						Geral.XP = 0
+						Geral.Time = 0
+						
+						for i,NomeDaClasse:string in ipairs(Configuracoes.Classes) do
+							Geral.XP += ClassXP[NomeDaClasse]
+							Geral.Time += ClassTime[NomeDaClasse]
+							if Comparar(TopAtual.ClassXP,ClassXP[NomeDaClasse],NomeDaClasse,Player,LimiteClassXP) then
+								Mudanca = true
+							end
+							if Comparar(TopAtual.ClassTime,ClassTime[NomeDaClasse],NomeDaClasse,Player,LimiteClassXP) then
+								Mudanca = true
+							end
+							if not TopAtual.ClassStatistic[NomeDaClasse] then
+								Mudanca = true
+								TopAtual.ClassStatistic[NomeDaClasse] = {}
+							end
+							for NomeDaEstatistica,Valor in pairs(ClassStatistic[NomeDaClasse]) do
+								if Comparar(TopAtual.ClassStatistic[NomeDaClasse],Valor,NomeDaEstatistica,Player,LimiteClassStatistic) then
+									Mudanca = true
+								end
+								Geral[NomeDaEstatistica] = Geral[NomeDaEstatistica] or 0
+								Geral[NomeDaEstatistica] += Valor
+							end
+						end
+						if Comparar(TopAtual.Geral,Geral.XP,"XP",Player,LimiteClassStatistic) then
+							Mudanca = true
+						end
+						if Comparar(TopAtual.Geral,Geral.Time,"Time",Player,LimiteClassStatistic) then
+							Mudanca = true
+						end
+						for i,NomeDaClasse:string in ipairs(Configuracoes.Classes) do
+							for NomeDaEstatistica,Valor in pairs(ClassStatistic[NomeDaClasse]) do
+								if Comparar(TopAtual.Geral,Geral[NomeDaEstatistica],NomeDaEstatistica,Player,LimiteClassStatistic) then
+									Mudanca = true
+								end
+							end
+							break
+						end
+						for NomeDoItem,EstatisticasDosItens in pairs(PaternDeEquipamento) do
+							if not TopAtual.ItemStatistic[NomeDoItem] then
+								Mudanca = true
+								TopAtual.ItemStatistic[NomeDoItem] = {}
+							end
+							for NomeDaEstatistica,Valor in pairs(EstatisticasDosItens) do
+								if Comparar(TopAtual.ItemStatistic[NomeDoItem],ItemStatistic[NomeDoItem][NomeDaEstatistica],NomeDaEstatistica,Player,LimiteItens) then
+									Mudanca = true
+								end
+							end
+						end
+					end
+					Top.AtualTop = TopAtual
+					if Mudanca then
+						return TopAtual
+					else
+						return nil
+					end
+					
+				end)
+			end)
+		until Sucesso
+	end
+end)
+
+return Top
